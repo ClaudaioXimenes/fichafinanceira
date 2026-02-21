@@ -2,7 +2,6 @@ streamlit
 pandas
 pygwalker
 requests
-xml
 zeep
 plotly
 

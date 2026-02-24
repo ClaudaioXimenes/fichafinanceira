@@ -245,6 +245,7 @@ _defaults = {
     "param_coligada": "1",
     "param_ano": 2024,
     "executar_consulta": False,
+    "consultou": False,
     "conexao_ok": False,
     "servidor_base": "http://localhost:8051",
     "rm_usuario": "mestre",
@@ -347,12 +348,19 @@ if st.session_state.get("executar_consulta"):
             int(st.session_state["param_coligada"]),
             int(st.session_state["param_ano"])
         )
+    # Sinaliza que a consulta foi executada (para distinguir de "ainda não consultou")
+    st.session_state["consultou"] = True
 
 df: pd.DataFrame = st.session_state.get("df", pd.DataFrame())
 
-# Se ainda não consultou ou df não tem as colunas esperadas, para aqui
-if df.empty or "Ano" not in df.columns:
+# Se ainda não consultou, exibe instrução inicial
+if not st.session_state.get("consultou"):
     st.info("👆 Preencha a Coligada e o Ano acima e clique em **Consultar** para carregar os dados.")
+    st.stop()
+
+# Consultou mas não retornou dados
+if df.empty or "Ano" not in df.columns:
+    st.warning(f"⚠️ Dados não encontrados para a Coligada **{st.session_state['param_coligada']}** / Ano **{st.session_state['param_ano']}**. Favor verificar o ano informado.")
     st.stop()
 
 colunas_esperadas = ["Ano", "Mês", "Nome", "Tipo Evento", "Evento", "Valor", "Empresa"]
@@ -485,6 +493,149 @@ for tab, agrup in zip(tabs_comp, agrupamentos):
                 df_alerta_fmt["Descontos"] = df_alerta_fmt["Descontos"].apply(fmt)
                 df_alerta_fmt["Índice (%)"] = df_alerta_fmt["Índice (%)"].apply(lambda v: f"{v:.1f}%")
                 st.dataframe(df_alerta_fmt.reset_index(drop=True), use_container_width=True)
+
+
+st.markdown("---")
+
+# ============================================================
+# ENVELOPE DE PAGAMENTO
+# ============================================================
+st.subheader("🧾 Envelope de Pagamento")
+st.caption("Selecione um funcionário e o período para visualizar o envelope detalhado.")
+
+col_env1, col_env2, col_env3, col_env4 = st.columns([2, 1, 1, 1])
+
+with col_env1:
+    lista_func_env = sorted(df["Nome"].unique().tolist())
+    func_env = st.selectbox("👤 Funcionário", lista_func_env, key="env_func")
+
+with col_env2:
+    meses_env_disp = sorted(df["Mês"].dropna().unique().tolist())
+    mes_env = st.selectbox(
+        "🗓️ Mês",
+        meses_env_disp,
+        index=len(meses_env_disp) - 1,
+        format_func=lambda m: MESES.get(int(m), str(m)),
+        key="env_mes"
+    )
+
+with col_env3:
+    periodos_env_disp = sorted(df[(df["Nome"] == func_env) & (df["Mês"] == mes_env)]["Período"].dropna().unique().tolist())
+    if not periodos_env_disp:
+        periodos_env_disp = sorted(df[df["Mês"] == mes_env]["Período"].dropna().unique().tolist())
+    periodo_env = st.selectbox(
+        "📋 Período",
+        periodos_env_disp,
+        index=len(periodos_env_disp) - 1,
+        key="env_periodo"
+    )
+
+with col_env4:
+    st.markdown("<br>", unsafe_allow_html=True)
+    gerar_envelope = st.button("📄 Gerar Envelope", use_container_width=True)
+
+if gerar_envelope:
+    st.session_state["envelope_gerado"] = True
+    st.session_state["envelope_func"]   = func_env
+    st.session_state["envelope_mes"]    = mes_env
+    st.session_state["envelope_period"] = periodo_env
+
+if st.session_state.get("envelope_gerado"):
+    _func   = st.session_state["envelope_func"]
+    _mes    = st.session_state["envelope_mes"]
+    _period = st.session_state["envelope_period"]
+
+    df_env = df[(df["Nome"] == _func) & (df["Mês"] == _mes) & (df["Período"] == _period)].copy()
+
+    # Label legível
+    if not df_env.empty:
+        _ano_env = int(df_env["Ano"].iloc[0])
+        _period_label = f"{MESES.get(_mes, str(_mes))}/{_ano_env} — Período {_period}"
+    else:
+        _period_label = f"{MESES.get(_mes, str(_mes))} — Período {_period}"
+
+    if df_env.empty:
+        st.warning(f"Nenhum dado encontrado para **{_func}** no período **{_period_label}**.")
+    else:
+        empresa = df_env["Empresa"].iloc[0] if "Empresa" in df_env.columns else ""
+
+        proventos_df = df_env[df_env["Tipo Evento"] == "Provento"][["Evento", "Período", "Valor"]].copy()
+        descontos_df = df_env[df_env["Tipo Evento"] == "Desconto"][["Evento", "Período", "Valor"]].copy()
+
+        total_prov = proventos_df["Valor"].sum()
+        total_desc = descontos_df["Valor"].sum()
+        liquido    = total_prov - total_desc
+
+        linhas = []
+        for _, row in proventos_df.iterrows():
+            ev = str(int(float(row["Evento"]))) if str(row["Evento"]).replace(".","").isdigit() else row["Evento"]
+            linhas.append({"Evento": ev, "Proventos": fmt(row["Valor"]), "Descontos": ""})
+        for _, row in descontos_df.iterrows():
+            ev = str(int(float(row["Evento"]))) if str(row["Evento"]).replace(".","").isdigit() else row["Evento"]
+            linhas.append({"Evento": ev, "Proventos": "", "Descontos": fmt(row["Valor"])})
+
+        df_envelope = pd.DataFrame(linhas)
+
+        rows_html = ""
+        for _, r in df_envelope.iterrows():
+            rows_html += f"""
+            <tr>
+                <td style="text-align:center">{r['Evento']}</td>
+                <td style="text-align:right">{r['Proventos']}</td>
+                <td style="text-align:right">{r['Descontos']}</td>
+            </tr>"""
+
+        envelope_html = f"""
+        <style>
+            .envelope-wrap {{ font-family: Arial, sans-serif; font-size: 13px; color: #e0e0e0; }}
+            .envelope-wrap table {{ width: 100%; border-collapse: collapse; background: #1e1e2e; border-radius: 8px; overflow: hidden; }}
+            .envelope-wrap .title-row td {{ background: #2d2d44; text-align: center; font-weight: bold; font-size: 15px; padding: 10px; letter-spacing: 1px; color: #ffffff; border-bottom: 2px solid #444; }}
+            .envelope-wrap .func-row td {{ background: #252535; padding: 6px 10px; font-weight: bold; color: #ccc; border-bottom: 1px solid #444; text-align: center; }}
+            .envelope-wrap .header-row td {{ background: #2d2d44; padding: 7px 10px; color: #aaa; font-size: 12px; border-bottom: 2px solid #555; font-weight: bold; text-transform: uppercase; }}
+            .envelope-wrap thead th {{ background: #2d2d44; padding: 7px 10px; text-align: center; color: #aaa; font-size: 12px; border-bottom: 2px solid #555; text-transform: uppercase; }}
+            .envelope-wrap tbody tr:nth-child(even) {{ background: #1a1a2e; }}
+            .envelope-wrap tbody tr:nth-child(odd) {{ background: #1e1e2e; }}
+            .envelope-wrap tbody td {{ padding: 6px 10px; border-bottom: 1px solid #2a2a3e; text-align: center; }}
+            .envelope-wrap .totals-row td {{ background: #252535; padding: 7px 10px; font-weight: bold; text-align: right; border-top: 2px solid #555; color: #ccc; }}
+            .envelope-wrap .liquido-row td {{ background: #1c3a2a; padding: 8px 10px; font-weight: bold; text-align: right; color: #2ecc71; font-size: 14px; border-top: 2px solid #2ecc71; }}
+            .envelope-wrap .liquido-row .label {{ text-align: left; color: #2ecc71; font-weight: bold; }}
+        </style>
+        <div class="envelope-wrap">
+        <table>
+            <tbody>
+                <tr class="title-row"><td colspan="3">ENVELOPE DE PAGAMENTO</td></tr>
+                <tr class="func-row"><td colspan="3">FUNCIONÁRIO: {_func} &nbsp;&nbsp;|&nbsp;&nbsp; EMPRESA: {empresa} &nbsp;&nbsp;|&nbsp;&nbsp; PERÍODO: {_period_label}</td></tr>
+                <tr class="header-row">
+                    <td style="text-align:center; width:60%">DESCRIÇÃO</td>
+                    <td style="text-align:right; width:20%">PROVENTOS</td>
+                    <td style="text-align:right; width:20%">DESCONTOS</td>
+                </tr>
+                {rows_html}
+            </tbody>
+            <tr class="totals-row">
+                <td style="text-align:right; color:#aaa">Totais</td>
+                <td>{fmt(total_prov)}</td>
+                <td>{fmt(total_desc)}</td>
+            </tr>
+            <tr class="liquido-row">
+                <td class="label">💰 LÍQUIDO</td>
+                <td></td>
+                <td>{fmt(liquido)}</td>
+            </tr>
+        </table>
+        </div>
+        """
+
+        st.html(envelope_html)
+
+        csv_env = df_envelope.to_csv(index=False, sep=";", decimal=",").encode("utf-8")
+        st.download_button(
+            label="⬇️ Baixar Envelope CSV",
+            data=csv_env,
+            file_name=f"envelope_{_func.replace(' ','_')}_{_period_label.replace('/','_')}.csv",
+            mime="text/csv"
+        )
+
 
 st.markdown("---")
 st.subheader("📋 Dados Detalhados")

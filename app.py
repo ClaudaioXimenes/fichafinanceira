@@ -168,7 +168,7 @@ def grafico_comprometimento(df: pd.DataFrame, limiar: float, agrupamento: str):
     grp  = pd.concat([prov, desc], axis=1).fillna(0).reset_index()
     grp  = grp[grp["Proventos"] > 0].copy()
     grp["Índice (%)"] = (grp["Descontos"] / grp["Proventos"] * 100).round(1)
-    grp = grp.sort_values("Índice (%)", ascending=True).tail(20)
+    grp = grp.sort_values("Índice (%)", ascending=False)
 
     # Para agrupamento por Nome, enriquecer com Seção e Função
     if col == "Nome":
@@ -229,7 +229,7 @@ def grafico_comprometimento(df: pd.DataFrame, limiar: float, agrupamento: str):
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="white"),
         xaxis=dict(gridcolor="rgba(255,255,255,0.1)", ticksuffix="%"),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.1)")
+        yaxis=dict(gridcolor="rgba(255,255,255,0.1)", autorange="reversed")
     )
     return fig, alertas, grp
 
@@ -247,6 +247,9 @@ _defaults = {
     "executar_consulta": False,
     "consultou": False,
     "conexao_ok": False,
+    "pag_Nome": 0,
+    "pag_Seção": 0,
+    "pag_Função": 0,
     "servidor_base": "http://localhost:8051",
     "rm_usuario": "mestre",
     "rm_senha": "",
@@ -472,17 +475,62 @@ with col_limiar:
         help="Registros com índice acima deste valor serão marcados em vermelho"
     )
 
+POR_PAGINA = 20
+
 tabs_comp = st.tabs(["👤 Por Funcionário", "🏢 Por Seção", "👔 Por Função"])
 
 agrupamentos = ["Nome", "Seção", "Função"]
 for tab, agrup in zip(tabs_comp, agrupamentos):
     with tab:
-        fig_comp, qtd_alertas, df_comp = grafico_comprometimento(df_filtrado, limiar_pct, agrup)
+        # Calcula df completo primeiro para paginação
+        _, qtd_alertas, df_comp = grafico_comprometimento(df_filtrado, limiar_pct, agrup)
+
         if qtd_alertas > 0:
             st.warning(f"⚠️ **{qtd_alertas}** {agrup.lower()}(s) com índice de comprometimento acima de **{limiar_pct}%**")
         else:
             st.success(f"✅ Nenhum(a) {agrup.lower()} acima do limiar de **{limiar_pct}%**")
-        st.plotly_chart(fig_comp, use_container_width=True)
+
+        # Paginação
+        total     = len(df_comp)
+        total_pag = max(1, -(-total // POR_PAGINA))  # ceil division
+        pag_key   = f"pag_{agrup}"
+        pag_atual = st.session_state.get(pag_key, 0)
+        pag_atual = min(pag_atual, total_pag - 1)  # evita página inválida ao mudar filtro
+
+        inicio = pag_atual * POR_PAGINA
+        fim    = inicio + POR_PAGINA
+        df_pag = df_comp.iloc[inicio:fim]
+
+        # Gera gráfico só com a página atual
+        fig_pag, _, _ = grafico_comprometimento(
+            df_filtrado[df_filtrado[agrup].isin(df_pag[agrup])],
+            limiar_pct, agrup
+        )
+        fig_pag.update_layout(title=f"🚨 Índice de Comprometimento por {agrup} — Página {pag_atual+1}/{total_pag}  ({total} registros)")
+        st.plotly_chart(fig_pag, use_container_width=True)
+
+        # Controles de paginação
+        col_prev, *cols_num, col_next = st.columns([1] + [1]*min(total_pag, 10) + [1])
+
+        with col_prev:
+            if st.button("◀", key=f"prev_{agrup}", disabled=pag_atual == 0):
+                st.session_state[pag_key] = pag_atual - 1
+                st.rerun()
+
+        for i, col in enumerate(cols_num):
+            pag_i = i if total_pag <= 10 else round(i * (total_pag - 1) / max(len(cols_num)-1, 1))
+            label = f"**{pag_i+1}**" if pag_i == pag_atual else str(pag_i+1)
+            with col:
+                if st.button(label, key=f"pag_{agrup}_{i}"):
+                    st.session_state[pag_key] = pag_i
+                    st.rerun()
+
+        with col_next:
+            if st.button("▶", key=f"next_{agrup}", disabled=pag_atual >= total_pag - 1):
+                st.session_state[pag_key] = pag_atual + 1
+                st.rerun()
+
+        st.caption(f"Exibindo {inicio+1}–{min(fim, total)} de **{total}** registros")
 
         # Tabela resumo dos que estão em alerta
         df_alerta = df_comp[df_comp["Índice (%)"] >= limiar_pct].sort_values("Índice (%)", ascending=False)

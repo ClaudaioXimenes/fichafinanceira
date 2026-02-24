@@ -130,30 +130,89 @@ def grafico_evolucao_saldo(df: pd.DataFrame):
     return fig
 
 
-def grafico_gastos_funcao(df: pd.DataFrame):
-    grp = df.groupby("Função")["Valor"].sum().reset_index()
-    grp = grp.sort_values("Valor", ascending=True).tail(10)
+def grafico_gastos_funcao(df: pd.DataFrame, coluna: str = "Valor"):
+    grp = df.groupby("Função")[coluna].sum().reset_index()
+    grp = grp.sort_values(coluna, ascending=True).tail(10)
+    label = "Valor Líquido (R$)" if coluna == "Liquido" else "Valor Total (R$)"
 
-    fig = go.Figure(go.Bar(x=grp["Valor"], y=grp["Função"], orientation="h",
-        marker_color="#3498db", text=grp["Valor"].apply(fmt), textposition="outside"))
-    fig.update_layout(title="👔 Gastos por Função (Top 10)", xaxis_title="Valor Total (R$)",
+    fig = go.Figure(go.Bar(x=grp[coluna], y=grp["Função"], orientation="h",
+        marker_color="#3498db", text=grp[coluna].apply(fmt), textposition="outside"))
+    fig.update_layout(title="👔 Gastos por Função (Top 10)", xaxis_title=label,
         yaxis_title="", height=400, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="white"), xaxis=dict(gridcolor="rgba(255,255,255,0.1)"),
         yaxis=dict(gridcolor="rgba(255,255,255,0.1)"))
     return fig
 
 
-def grafico_gastos_secao(df: pd.DataFrame):
-    grp = df.groupby("Seção")["Valor"].sum().reset_index()
-    grp = grp.sort_values("Valor", ascending=True).tail(10)
+def grafico_gastos_secao(df: pd.DataFrame, coluna: str = "Valor"):
+    grp = df.groupby("Seção")[coluna].sum().reset_index()
+    grp = grp.sort_values(coluna, ascending=True).tail(10)
+    label = "Valor Líquido (R$)" if coluna == "Liquido" else "Valor Total (R$)"
 
-    fig = go.Figure(go.Bar(x=grp["Valor"], y=grp["Seção"], orientation="h",
-        marker_color="#9b59b6", text=grp["Valor"].apply(fmt), textposition="outside"))
-    fig.update_layout(title="🏢 Gastos por Seção (Top 10)", xaxis_title="Valor Total (R$)",
+    fig = go.Figure(go.Bar(x=grp[coluna], y=grp["Seção"], orientation="h",
+        marker_color="#9b59b6", text=grp[coluna].apply(fmt), textposition="outside"))
+    fig.update_layout(title="🏢 Gastos por Seção (Top 10)", xaxis_title=label,
         yaxis_title="", height=400, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         font=dict(color="white"), xaxis=dict(gridcolor="rgba(255,255,255,0.1)"),
         yaxis=dict(gridcolor="rgba(255,255,255,0.1)"))
     return fig
+
+
+def grafico_comprometimento(df: pd.DataFrame, limiar: float, agrupamento: str):
+    """Gráfico de barras com índice de comprometimento (Descontos / Proventos) por agrupamento."""
+    col = agrupamento  # "Nome", "Seção" ou "Função"
+
+    prov = df[df["Tipo Evento"] == "Provento"].groupby(col)["Valor"].sum().rename("Proventos")
+    desc = df[df["Tipo Evento"] == "Desconto"].groupby(col)["Valor"].sum().rename("Descontos")
+    grp  = pd.concat([prov, desc], axis=1).fillna(0).reset_index()
+    grp  = grp[grp["Proventos"] > 0].copy()
+    grp["Índice (%)"] = (grp["Descontos"] / grp["Proventos"] * 100).round(1)
+    grp = grp.sort_values("Índice (%)", ascending=True).tail(20)
+
+    colors = ["#e74c3c" if v >= limiar else "#2ecc71" for v in grp["Índice (%)"]]
+    texto  = grp["Índice (%)"].apply(lambda v: f"{v:.1f}%")
+
+    fig = go.Figure(go.Bar(
+        x=grp["Índice (%)"],
+        y=grp[col],
+        orientation="h",
+        marker_color=colors,
+        text=texto,
+        textposition="outside",
+        customdata=grp[["Proventos", "Descontos"]].values,
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Índice: %{x:.1f}%<br>"
+            "Proventos: R$ %{customdata[0]:,.2f}<br>"
+            "Descontos: R$ %{customdata[1]:,.2f}<extra></extra>"
+        )
+    ))
+
+    # Linha do limiar
+    fig.add_vline(
+        x=limiar,
+        line_dash="dash",
+        line_color="#f39c12",
+        annotation_text=f"  Limiar {limiar:.0f}%",
+        annotation_font_color="#f39c12",
+        annotation_position="top right"
+    )
+
+    alertas = (grp["Índice (%)"] >= limiar).sum()
+    titulo  = f"🚨 Índice de Comprometimento por {col} — {alertas} acima do limiar"
+
+    fig.update_layout(
+        title=titulo,
+        xaxis_title="Descontos / Proventos (%)",
+        yaxis_title="",
+        height=max(400, len(grp) * 28),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white"),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.1)", ticksuffix="%"),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.1)")
+    )
+    return fig, alertas, grp
 
 
 # ============================================================
@@ -356,17 +415,59 @@ with col1:
 with col2:
     st.plotly_chart(grafico_ranking_eventos(df_filtrado), use_container_width=True)
 
+tipo_valor = st.radio(
+    "💰 Tipo de Valor — Gastos por Função e Seção",
+    options=["Valor Bruto", "Valor Líquido"],
+    horizontal=True,
+    help="Selecione se os gráficos de Função e Seção exibem o valor bruto ou o valor líquido (proventos − descontos)"
+)
+coluna_valor = "Liquido" if tipo_valor == "Valor Líquido" else "Valor"
+
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(grafico_gastos_funcao(df_filtrado), use_container_width=True)
+    st.plotly_chart(grafico_gastos_funcao(df_filtrado, coluna_valor), use_container_width=True)
 with col2:
-    st.plotly_chart(grafico_gastos_secao(df_filtrado), use_container_width=True)
+    st.plotly_chart(grafico_gastos_secao(df_filtrado, coluna_valor), use_container_width=True)
 
 st.markdown("---")
 
 # ============================================================
-# TABELA DETALHADA
+# ÍNDICE DE COMPROMETIMENTO
 # ============================================================
+st.subheader("🚨 Índice de Comprometimento de Descontos")
+st.caption("Proporção de Descontos em relação aos Proventos. Valores acima do limiar são destacados em vermelho.")
+
+col_limiar, col_spacer = st.columns([1, 3])
+with col_limiar:
+    limiar_pct = st.slider(
+        "⚠️ Limiar de alerta (%)",
+        min_value=10, max_value=80, value=30, step=5,
+        help="Registros com índice acima deste valor serão marcados em vermelho"
+    )
+
+tabs_comp = st.tabs(["👤 Por Funcionário", "🏢 Por Seção", "👔 Por Função"])
+
+agrupamentos = ["Nome", "Seção", "Função"]
+for tab, agrup in zip(tabs_comp, agrupamentos):
+    with tab:
+        fig_comp, qtd_alertas, df_comp = grafico_comprometimento(df_filtrado, limiar_pct, agrup)
+        if qtd_alertas > 0:
+            st.warning(f"⚠️ **{qtd_alertas}** {agrup.lower()}(s) com índice de comprometimento acima de **{limiar_pct}%**")
+        else:
+            st.success(f"✅ Nenhum(a) {agrup.lower()} acima do limiar de **{limiar_pct}%**")
+        st.plotly_chart(fig_comp, use_container_width=True)
+
+        # Tabela resumo dos que estão em alerta
+        df_alerta = df_comp[df_comp["Índice (%)"] >= limiar_pct].sort_values("Índice (%)", ascending=False)
+        if not df_alerta.empty:
+            with st.expander(f"📋 Ver detalhes dos {agrup.lower()}(s) em alerta"):
+                df_alerta_fmt = df_alerta[[agrup, "Proventos", "Descontos", "Índice (%)"]].copy()
+                df_alerta_fmt["Proventos"] = df_alerta_fmt["Proventos"].apply(fmt)
+                df_alerta_fmt["Descontos"] = df_alerta_fmt["Descontos"].apply(fmt)
+                df_alerta_fmt["Índice (%)"] = df_alerta_fmt["Índice (%)"].apply(lambda v: f"{v:.1f}%")
+                st.dataframe(df_alerta_fmt.reset_index(drop=True), use_container_width=True)
+
+st.markdown("---")
 st.subheader("📋 Dados Detalhados")
 
 tab1, tab2 = st.tabs(["📊 Análise Dinâmica (PyGWalker)", "📋 Tabela"])

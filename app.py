@@ -130,6 +130,7 @@ def grafico_evolucao_saldo(df: pd.DataFrame):
     return fig
 
 
+
 def grafico_gastos_funcao(df: pd.DataFrame, coluna: str = "Valor"):
     grp = df.groupby("Função")[coluna].sum().reset_index()
     grp = grp.sort_values(coluna, ascending=True).tail(10)
@@ -169,6 +170,29 @@ def grafico_comprometimento(df: pd.DataFrame, limiar: float, agrupamento: str):
     grp["Índice (%)"] = (grp["Descontos"] / grp["Proventos"] * 100).round(1)
     grp = grp.sort_values("Índice (%)", ascending=True).tail(20)
 
+    # Para agrupamento por Nome, enriquecer com Seção e Função
+    if col == "Nome":
+        info = df[["Nome", "Seção", "Função"]].drop_duplicates("Nome").set_index("Nome")
+        grp["Seção"]  = grp["Nome"].map(info["Seção"]).fillna("-")
+        grp["Função"] = grp["Nome"].map(info["Função"]).fillna("-")
+        customdata = grp[["Proventos", "Descontos", "Seção", "Função"]].values
+        hovertemplate = (
+            "<b>%{y}</b><br>"
+            "Seção: %{customdata[2]}<br>"
+            "Função: %{customdata[3]}<br>"
+            "Índice: %{x:.1f}%<br>"
+            "Proventos: R$ %{customdata[0]:,.2f}<br>"
+            "Descontos: R$ %{customdata[1]:,.2f}<extra></extra>"
+        )
+    else:
+        customdata = grp[["Proventos", "Descontos"]].values
+        hovertemplate = (
+            "<b>%{y}</b><br>"
+            "Índice: %{x:.1f}%<br>"
+            "Proventos: R$ %{customdata[0]:,.2f}<br>"
+            "Descontos: R$ %{customdata[1]:,.2f}<extra></extra>"
+        )
+
     colors = ["#e74c3c" if v >= limiar else "#2ecc71" for v in grp["Índice (%)"]]
     texto  = grp["Índice (%)"].apply(lambda v: f"{v:.1f}%")
 
@@ -179,13 +203,8 @@ def grafico_comprometimento(df: pd.DataFrame, limiar: float, agrupamento: str):
         marker_color=colors,
         text=texto,
         textposition="outside",
-        customdata=grp[["Proventos", "Descontos"]].values,
-        hovertemplate=(
-            "<b>%{y}</b><br>"
-            "Índice: %{x:.1f}%<br>"
-            "Proventos: R$ %{customdata[0]:,.2f}<br>"
-            "Descontos: R$ %{customdata[1]:,.2f}<extra></extra>"
-        )
+        customdata=customdata,
+        hovertemplate=hovertemplate
     ))
 
     # Linha do limiar

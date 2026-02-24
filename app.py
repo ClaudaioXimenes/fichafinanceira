@@ -160,6 +160,22 @@ def grafico_gastos_secao(df: pd.DataFrame):
 # LAYOUT DO DASHBOARD
 # ============================================================
 st.set_page_config(page_title="Ficha Financeira - RM TOTVS", page_icon="📊", layout="wide")
+
+# Inicializa todas as chaves do session_state para evitar KeyError
+_defaults = {
+    "df": pd.DataFrame(),
+    "param_coligada": "1",
+    "param_ano": 2024,
+    "executar_consulta": False,
+    "conexao_ok": False,
+    "servidor_base": "http://localhost:8051",
+    "rm_usuario": "mestre",
+    "rm_senha": "",
+    "wsdl_url": "",
+}
+for _k, _v in _defaults.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 st.title("📊 Ficha Financeira - RM TOTVS")
 st.markdown("---")
 
@@ -254,15 +270,11 @@ if st.session_state.get("executar_consulta"):
             int(st.session_state["param_ano"])
         )
 
-# Se ainda não consultou, para aqui
-if "df" not in st.session_state:
+df: pd.DataFrame = st.session_state.get("df", pd.DataFrame())
+
+# Se ainda não consultou ou df não tem as colunas esperadas, para aqui
+if df.empty or "Ano" not in df.columns:
     st.info("👆 Preencha a Coligada e o Ano acima e clique em **Consultar** para carregar os dados.")
-    st.stop()
-
-df: pd.DataFrame = st.session_state["df"]
-
-if df.empty:
-    st.warning("Nenhum dado encontrado para os parâmetros informados.")
     st.stop()
 
 colunas_esperadas = ["Ano", "Mês", "Nome", "Tipo Evento", "Evento", "Valor", "Empresa"]
@@ -280,13 +292,16 @@ st.markdown("---")
 # FILTROS
 # ============================================================
 st.subheader("🔎 Filtros")
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     anos = st.multiselect("Ano", sorted(df["Ano"].unique()), default=sorted(df["Ano"].unique()))
 with col2:
     tipos = st.multiselect("Tipo de Evento", df["Tipo Evento"].unique(), default=df["Tipo Evento"].unique())
 with col3:
+    periodos_disponiveis = sorted(df["Período"].dropna().unique().tolist())
+    periodos_sel = st.multiselect("Período", periodos_disponiveis, default=periodos_disponiveis)
+with col4:
     lista_funcionarios = ["Todos"] + sorted(df["Nome"].unique().tolist())
     funcionario_sel = st.selectbox("👤 Funcionário", lista_funcionarios)
 
@@ -306,6 +321,7 @@ nomes_filtro = df["Nome"].unique() if funcionario_sel == "Todos" else [funcionar
 df_filtrado = df[
     df["Ano"].isin(anos) &
     df["Tipo Evento"].isin(tipos) &
+    df["Período"].isin(periodos_sel) &
     df["Nome"].isin(nomes_filtro) &
     df["Mês"].between(mes_inicio, mes_fim)
 ]
